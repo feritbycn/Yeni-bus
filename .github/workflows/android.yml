@@ -1,0 +1,92 @@
+name: Android APK & AAB
+
+# Manual run (Actions -> "Android APK & AAB" -> Run workflow) or push a tag like v0.1.0.
+on:
+  workflow_dispatch:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write   # only used to attach files to a GitHub Release on tag pushes
+
+concurrency:
+  group: android-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  android:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    env:
+      HAVE_KEYSTORE: ${{ secrets.ANDROID_KEYSTORE_BASE64 != '' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      - name: Install, typecheck, test, build the web game
+        run: |
+          npm ci
+          npm run typecheck
+          npm test
+          npm run build
+
+      - name: Sync web build into the Android project
+        run: npx cap sync android
+
+      - name: Version numbers
+        id: ver
+        run: |
+          echo "name=$(node -p "require('./package.json').version")" >> "$GITHUB_OUTPUT"
+          echo "code=${{ github.run_number }}" >> "$GITHUB_OUTPUT"
+
+      - name: Decode release keystore (only when the secrets exist)
+        if: env.HAVE_KEYSTORE == 'true'
+        run: |
+          echo "${{ secrets.ANDROID_KEYSTORE_BASE64 }}" | base64 -d > "$RUNNER_TEMP/release.keystore"
+          echo "RM_KEYSTORE_PATH=$RUNNER_TEMP/release.keystore" >> "$GITHUB_ENV"
+          echo "RM_KEYSTORE_PASSWORD=${{ secrets.ANDROID_KEYSTORE_PASSWORD }}" >> "$GITHUB_ENV"
+          echo "RM_KEY_ALIAS=${{ secrets.ANDROID_KEY_ALIAS }}" >> "$GITHUB_ENV"
+          echo "RM_KEY_PASSWORD=${{ secrets.ANDROID_KEY_PASSWORD }}" >> "$GITHUB_ENV"
+
+      - name: Build debug APK + debug-signed AAB (always; for testing only)
+        working-directory: android
+        run: ./gradlew --no-daemon assembleDebug bundleDebug -PversionCode=${{ steps.ver.outputs.code }} -PversionName=${{ steps.ver.outputs.name }}
+
+      - name: Build SIGNED release APK + AAB (needs the keystore secrets)
+        if: env.HAVE_KEYSTORE == 'true'
+        working-directory: android
+        run: ./gradlew --no-daemon assembleRelease bundleRelease -PversionCode=${{ steps.ver.outputs.code }} -PversionName=${{ steps.ver.outputs.name }}
+
+      - name: Collect files
+        run: |
+          mkdir -p out
+          cp android/app/build/outputs/apk/debug/app-debug.apk out/RoadMaster-debug.apk
+          cp android/app/build/outputs/bundle/debug/app-debug.aab out/RoadMaster-debug-NOT-FOR-PLAY.aab
+          if [ "$HAVE_KEYSTORE" = "true" ]; then
+            cp android/app/build/outputs/apk/release/app-release.apk out/RoadMaster-release.apk
+            cp android/app/build/outputs/bundle/release/app-release.aab out/RoadMaster-release.aab
+          fi
+          ls -la out
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: RoadMaster-android
+          path: out/*
+          if-no-files-found: error
+
+      - name: Attach to the GitHub Release (tag pushes)
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: out/*
