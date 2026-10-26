@@ -9,7 +9,7 @@ android {
         targetSdkVersion rootProject.ext.targetSdkVersion
         // CI passes -PversionCode=<run number> -PversionName=<package.json version>; Play needs a higher code every upload
         versionCode Integer.parseInt((project.findProperty('versionCode') ?: '1').toString())
-        versionName (project.findProperty('versionName') ?: '0.1.0').toString()
+        versionName "${project.findProperty('versionName') ?: '0.1.0'}"
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         aaptOptions {
              // Files and dirs to omit from the packaged assets dir, modified to accommodate modern web apps.
